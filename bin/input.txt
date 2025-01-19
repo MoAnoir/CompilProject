@@ -1,0 +1,4 @@
+table utilisateurs:
+- id(entier, clé primaire, auto)
+- nom(texte, requis)
+- email(texte, unique)

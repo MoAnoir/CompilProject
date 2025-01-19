@@ -1,0 +1,258 @@
+options {
+    STATIC = false;
+}
+
+PARSER_BEGIN(SQLParser)
+
+package test1;
+
+import java.util.*;
+import java.io.*;
+
+public class SQLParser {
+    private StringBuilder sql;
+    private Map<String, List<String>> foreignKeys;
+    
+    {
+        sql = new StringBuilder();
+        foreignKeys = new HashMap<String, List<String>>();
+    }
+    
+    public static void main(String[] args) throws ParseException {
+        if (args.length == 0) {
+            System.err.println("Erreur : Veuillez spécifier un fichier d'entrée.");
+            return;
+        }
+         Scanner scanner = new Scanner(System.in);
+        System.out.print("Veuillez entrer le chemin du fichier d'entrée : ");
+        String filePath = scanner.nextLine();
+
+        //String inputFile = "C:\\Users\\Dell\\Desktop\\input.txt";
+        
+        try (FileInputStream fis = new FileInputStream(filePath)) {
+            SQLParser parser = new SQLParser(fis);
+            parser.Parse();
+            System.out.println(parser.getGeneratedSQL());
+        } catch (FileNotFoundException e) {
+            System.err.println("Erreur : Fichier non trouvé - " + e.getMessage());
+        } catch (IOException e) {
+            System.err.println("Erreur d'E/S - " + e.getMessage());
+        } catch (ParseException e) {
+            System.err.println("Erreur de parsing - " + e.getMessage());
+        }
+    }
+    
+    public String getGeneratedSQL() {
+        return sql.toString();
+    }
+}
+
+PARSER_END(SQLParser)
+
+SKIP :
+{
+    " "
+|   "\t"
+|   "\n"
+|   "\r"
+}
+
+TOKEN :
+{
+    < TABLE: "table" >
+|   < COLON: ":" >
+|   < DASH: "-" >
+|   < LPAREN: "(" >
+|   < RPAREN: ")" >
+|   < COMMA: "," >
+|   < INTEGER: "entier" >
+|   < TEXT: "texte" >
+|   < DATE: "date" >
+|   < PRIMARY_KEY: "clé" [ " " ] "primaire" >
+|   < AUTO: "auto" >
+|   < REQUIRED: "requis" >
+|   < UNIQUE: "unique" >
+|   < DEFAULT_VALUE: "par" [ " " ] "défaut" >
+|   < NOW: "maintenant" >
+|   < TODAY: "aujourd'hui" >
+|   < REFERENCE: "référence" >
+|   < DOT: "." >
+|   < IDENTIFIER: ["a"-"z","A"-"Z"] (["a"-"z","A"-"Z","0"-"9","_"])* >
+}
+
+void Parse() :
+{}
+{
+    (TableDefinition())*
+    <EOF>
+    {
+        for (Map.Entry<String, List<String>> entry : foreignKeys.entrySet()) {
+            sql.append("ALTER TABLE ").append(entry.getKey())
+               .append(" ADD ").append(String.join(",\n", entry.getValue()))
+               .append(";\n");
+        }
+    }
+}
+
+void TableDefinition() :
+{
+    Token tableName;
+}
+{
+    <TABLE> tableName=<IDENTIFIER> <COLON>
+    {
+        sql.append("CREATE TABLE ").append(tableName.image).append(" (\n");
+    }
+    ColumnList(tableName.image)
+    {
+        sql.append("\n);\n\n");
+    }
+}
+
+void ColumnList(String tableName) :
+{
+    List<String> columns = new ArrayList<String>();
+    List<String> foreignKeys = new ArrayList<String>();
+    String column;
+}
+{
+    (
+        <DASH> 
+        {
+            column = Column(tableName, foreignKeys);
+            if (column != null && !column.trim().isEmpty()) {
+                columns.add(column);
+            }
+        }
+    )+
+    {
+        sql.append(String.join(",\n", columns));
+        if (!foreignKeys.isEmpty()) {
+            sql.append(",\n").append(String.join(",\n", foreignKeys));
+        }
+    }
+}
+
+
+String Column(String tableName, List<String> foreignKeys) :
+{
+    Token columnName;
+    StringBuilder columnDef = new StringBuilder();
+    boolean isPrimaryKey = false;
+    boolean isAutoIncrement = false;
+}
+{
+    columnName=<IDENTIFIER> <LPAREN>
+    {
+        columnDef.append("    ").append(columnName.image).append(" ");
+    }
+    DataType(columnDef)
+    (
+        <COMMA>
+        (
+            PrimaryKey() { isPrimaryKey = true; }
+        |   Auto() { isAutoIncrement = true; }
+        |   Required(columnDef)
+        |   Unique(columnDef)
+        |   DefaultValue(columnDef)
+        |   ReferenceInline(tableName, columnName.image, foreignKeys)
+        )
+    )*
+    <RPAREN>
+    {
+        if (isPrimaryKey) {
+            columnDef.append(" PRIMARY KEY");
+            if (isAutoIncrement) {
+                columnDef.append(" AUTO_INCREMENT");
+            }
+        }
+        return columnDef.toString();
+    }
+}
+
+
+void ReferenceInline(String tableName, String columnName, List<String> foreignKeys) :
+{
+    Token refTable, refColumn;
+}
+{
+    <REFERENCE> <COLON> refTable=<IDENTIFIER> <DOT> refColumn=<IDENTIFIER>
+    {
+        String foreignKey = String.format("    FOREIGN KEY (%s) REFERENCES %s(%s)",
+            columnName, refTable.image, refColumn.image);
+        foreignKeys.add(foreignKey);
+    }
+}
+
+
+void DataType(StringBuilder columnDef) :
+{}
+{
+    <INTEGER> { columnDef.append("INTEGER"); }
+|   <TEXT> { columnDef.append("VARCHAR(255)"); }
+|   <DATE> { columnDef.append("DATE"); }
+}
+
+void PrimaryKey() :
+{}
+{
+    <PRIMARY_KEY>
+}
+
+void Auto() :
+{}
+{
+    <AUTO>
+}
+
+void Required(StringBuilder columnDef) :
+{}
+{
+    <REQUIRED>
+    {
+        columnDef.append(" NOT NULL");
+    }
+}
+
+void Unique(StringBuilder columnDef) :
+{}
+{
+    <UNIQUE>
+    {
+        columnDef.append(" UNIQUE");
+    }
+}
+
+void DefaultValue(StringBuilder columnDef) :
+{}
+{
+    <DEFAULT_VALUE> <COLON>
+    (
+        <NOW> {
+            columnDef.append(" DEFAULT CURRENT_TIMESTAMP");
+        }
+    |   <TODAY> {
+            columnDef.append(" DEFAULT CURRENT_DATE");
+        }
+    )
+}
+
+void Reference(String tableName, String columnName) :
+{
+    Token refTable, refColumn;
+}
+{
+    <REFERENCE> <COLON> refTable=<IDENTIFIER> <DOT> refColumn=<IDENTIFIER>
+    {
+        String foreignKey = String.format("    FOREIGN KEY (%s) REFERENCES %s(%s)",
+            columnName, refTable.image, refColumn.image);
+        
+        List<String> tableKeys = foreignKeys.get(tableName);
+        if (tableKeys == null) {
+            tableKeys = new ArrayList<String>();
+            foreignKeys.put(tableName, tableKeys);
+        }
+        tableKeys.add(foreignKey);
+    }
+}
+
